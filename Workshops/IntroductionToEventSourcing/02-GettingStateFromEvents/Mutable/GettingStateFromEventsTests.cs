@@ -1,7 +1,9 @@
+using System.Drawing.Printing;
 using FluentAssertions;
 using Xunit;
 
 namespace IntroductionToEventSourcing.GettingStateFromEvents.Mutable;
+
 using static ShoppingCartEvent;
 
 // EVENTS
@@ -33,7 +35,7 @@ public abstract record ShoppingCartEvent
     ): ShoppingCartEvent;
 
     // This won't allow external inheritance
-    private ShoppingCartEvent(){}
+    private ShoppingCartEvent() { }
 }
 
 // VALUE OBJECTS
@@ -56,6 +58,70 @@ public class ShoppingCart
     public IList<PricedProductItem> ProductItems { get; set; } = new List<PricedProductItem>();
     public DateTime? ConfirmedAt { get; set; }
     public DateTime? CanceledAt { get; set; }
+
+    public void Apply(ShoppingCartEvent @event)
+    {
+        switch (@event)
+        {
+            case ShoppingCartOpened opened:
+                Open(opened);
+                break;
+            case ProductItemAddedToShoppingCart productItemAdded:
+                AddProductItem(productItemAdded);
+                break;
+            case ProductItemRemovedFromShoppingCart productItemRemoved:
+                RemoveProductItem(productItemRemoved);
+                break;
+            case ShoppingCartConfirmed confirmed:
+                Confirm(confirmed);
+                break;
+            case ShoppingCartCanceled canceled:
+                Cancel(canceled);
+                break;
+        }
+    }
+
+    private void Cancel(ShoppingCartCanceled canceled)
+    {
+        CanceledAt = canceled.CanceledAt;
+        Status = ShoppingCartStatus.Canceled;
+    }
+
+    private void Confirm(ShoppingCartConfirmed confirmed)
+    {
+        ConfirmedAt = confirmed.ConfirmedAt;
+        Status = ShoppingCartStatus.Confirmed;
+    }
+
+    private void RemoveProductItem(ProductItemRemovedFromShoppingCart productItemRemoved)
+    {
+        var product = ProductItems.First(p => p.ProductId == productItemRemoved.ProductItem.ProductId);
+
+        product.Quantity -= productItemRemoved.ProductItem.Quantity;
+
+        if (product.Quantity <= 0)
+            ProductItems.Remove(product);
+    }
+
+    private void AddProductItem(ProductItemAddedToShoppingCart productItemAdded)
+    {
+        var product = ProductItems.FirstOrDefault(p => p.ProductId == productItemAdded.ProductItem.ProductId);
+
+
+        if (product == null)
+            ProductItems.Add(productItemAdded.ProductItem);
+        else
+        {
+            product.Quantity += productItemAdded.ProductItem.Quantity;
+        }
+    }
+
+    private void Open(ShoppingCartOpened opened)
+    {
+        Id = opened.ShoppingCartId;
+        ClientId = opened.ClientId;
+        Status = ShoppingCartStatus.Pending;
+    }
 }
 
 public enum ShoppingCartStatus
@@ -68,8 +134,17 @@ public enum ShoppingCartStatus
 public class GettingStateFromEventsTests
 {
     // 1. Add logic here
-    private static ShoppingCart GetShoppingCart(IEnumerable<ShoppingCartEvent> events) =>
-        throw new NotImplementedException();
+    private static ShoppingCart GetShoppingCart(IEnumerable<ShoppingCartEvent> events)
+    {
+        var shoppingCart = new ShoppingCart();
+
+        foreach (var @event in events)
+        {
+            shoppingCart.Apply(@event);
+        }
+
+        return shoppingCart;
+    }
 
     [Fact]
     [Trait("Category", "SkipCI")]
@@ -80,20 +155,11 @@ public class GettingStateFromEventsTests
         var shoesId = Guid.NewGuid();
         var tShirtId = Guid.NewGuid();
         var twoPairsOfShoes =
-            new PricedProductItem
-            {
-                ProductId = shoesId, Quantity = 2, UnitPrice = 100
-            };
+            new PricedProductItem { ProductId = shoesId, Quantity = 2, UnitPrice = 100 };
         var pairOfShoes =
-            new PricedProductItem
-            {
-                ProductId = shoesId, Quantity = 1, UnitPrice = 100
-            };
+            new PricedProductItem { ProductId = shoesId, Quantity = 1, UnitPrice = 100 };
         var tShirt =
-            new PricedProductItem
-            {
-                ProductId = tShirtId, Quantity = 1, UnitPrice = 50
-            };
+            new PricedProductItem { ProductId = tShirtId, Quantity = 1, UnitPrice = 50 };
 
         var events = new ShoppingCartEvent[]
         {
