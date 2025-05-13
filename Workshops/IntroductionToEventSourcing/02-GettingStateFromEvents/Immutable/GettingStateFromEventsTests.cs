@@ -1,7 +1,9 @@
 using FluentAssertions;
+using Weasel.Postgresql;
 using Xunit;
 
 namespace IntroductionToEventSourcing.GettingStateFromEvents.Immutable;
+
 using static ShoppingCartEvent;
 
 // EVENTS
@@ -33,7 +35,7 @@ public abstract record ShoppingCartEvent
     ): ShoppingCartEvent;
 
     // This won't allow external inheritance
-    private ShoppingCartEvent(){}
+    private ShoppingCartEvent() { }
 }
 
 // VALUE OBJECTS
@@ -51,7 +53,77 @@ public record ShoppingCart(
     PricedProductItem[] ProductItems,
     DateTime? ConfirmedAt = null,
     DateTime? CanceledAt = null
-);
+)
+{
+    public static ShoppingCart Evolve(ShoppingCart shoppingCart, ShoppingCartEvent @event)
+    {
+        return @event switch
+        {
+            ShoppingCartOpened opened => Open(opened),
+            ProductItemAddedToShoppingCart productItemAdded => AddProductItem(productItemAdded, shoppingCart),
+            ProductItemRemovedFromShoppingCart productItemRemoved =>
+                RemoveProductItem(productItemRemoved, shoppingCart),
+            ShoppingCartConfirmed confirmed => Confirm(confirmed, shoppingCart),
+            ShoppingCartCanceled canceled => Canceled(canceled, shoppingCart),
+            _ => shoppingCart
+        };
+    }
+
+    private static ShoppingCart Canceled(ShoppingCartCanceled canceled, ShoppingCart shoppingCart)
+    {
+        return shoppingCart with { CanceledAt = canceled.CanceledAt, Status = ShoppingCartStatus.Canceled };
+    }
+
+    private static ShoppingCart Confirm(ShoppingCartConfirmed confirmed, ShoppingCart shoppingCart)
+    {
+        return shoppingCart with { Status = ShoppingCartStatus.Confirmed, ConfirmedAt = confirmed.ConfirmedAt };
+    }
+
+    private static ShoppingCart RemoveProductItem(ProductItemRemovedFromShoppingCart productItemRemoved,
+        ShoppingCart shoppingCart)
+    {
+        var currentProductItems = shoppingCart.ProductItems.ToList();
+        var product = currentProductItems.Single(p => p.ProductId == productItemRemoved.ProductItem.ProductId);
+        var index = currentProductItems.FindIndex(p => p.ProductId == product.ProductId);
+
+        var quantity = product.Quantity - productItemRemoved.ProductItem.Quantity;
+
+
+        if (quantity > 0)
+            currentProductItems[index] = product with { Quantity = quantity };
+        else
+            currentProductItems.Remove(product);
+
+        return shoppingCart with { ProductItems = currentProductItems.ToArray() };
+    }
+
+    private static ShoppingCart Open(ShoppingCartOpened opened)
+    {
+        return new ShoppingCart(opened.ShoppingCartId,
+            opened.ClientId,
+            ShoppingCartStatus.Pending,
+            []);
+    }
+
+    private static ShoppingCart AddProductItem(ProductItemAddedToShoppingCart productItemAdded,
+        ShoppingCart shoppingCart)
+    {
+        var productItemsUpdated = shoppingCart.ProductItems.Concat(new[] { productItemAdded.ProductItem })
+            .GroupBy(p => p.ProductId).Select(group =>
+                group.Count() == 1
+                    ? group.First()
+                    : new PricedProductItem(
+                        group.Key,
+                        group.Sum(p => p.Quantity),
+                        group.First().UnitPrice)).ToArray();
+        return shoppingCart with { ProductItems = productItemsUpdated };
+    }
+
+    public static ShoppingCart Empty()
+    {
+        return new ShoppingCart(Guid.Empty, Guid.Empty, ShoppingCartStatus.Pending, []);
+    }
+};
 
 public enum ShoppingCartStatus
 {
@@ -64,7 +136,7 @@ public class GettingStateFromEventsTests
 {
     // 1. Add logic here
     private static ShoppingCart GetShoppingCart(IEnumerable<ShoppingCartEvent> events) =>
-        throw new NotImplementedException();
+        events.Aggregate(ShoppingCart.Empty(), ShoppingCart.Evolve);
 
     [Fact]
     [Trait("Category", "SkipCI")]
