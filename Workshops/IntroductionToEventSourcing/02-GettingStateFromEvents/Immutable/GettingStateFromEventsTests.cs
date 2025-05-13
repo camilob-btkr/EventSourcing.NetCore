@@ -1,4 +1,5 @@
 using FluentAssertions;
+using Weasel.Postgresql;
 using Xunit;
 
 namespace IntroductionToEventSourcing.GettingStateFromEvents.Immutable;
@@ -54,7 +55,7 @@ public record ShoppingCart(
     DateTime? CanceledAt = null
 )
 {
-    public static ShoppingCart Evolve(ShoppingCartEvent @event, ShoppingCart shoppingCart)
+    public static ShoppingCart Evolve(ShoppingCart shoppingCart, ShoppingCartEvent @event)
     {
         return @event switch
         {
@@ -107,18 +108,15 @@ public record ShoppingCart(
     private static ShoppingCart AddProductItem(ProductItemAddedToShoppingCart productItemAdded,
         ShoppingCart shoppingCart)
     {
-        var currentProductItems = shoppingCart.ProductItems.ToList();
-        var product = currentProductItems.SingleOrDefault(p => p.ProductId == productItemAdded.ProductItem.ProductId);
-
-        if (product == null)
-            currentProductItems.Add(productItemAdded.ProductItem);
-        else
-        {
-            currentProductItems.Remove(product);
-            currentProductItems.Add(product with { Quantity = product.Quantity + productItemAdded.ProductItem.Quantity });
-        }
-
-        return shoppingCart with { ProductItems = currentProductItems.ToArray() };
+        var productItemsUpdated = shoppingCart.ProductItems.Concat(new[] { productItemAdded.ProductItem })
+            .GroupBy(p => p.ProductId).Select(group =>
+                group.Count() == 1
+                    ? group.First()
+                    : new PricedProductItem(
+                        group.Key,
+                        group.Sum(p => p.Quantity),
+                        group.First().UnitPrice)).ToArray();
+        return shoppingCart with { ProductItems = productItemsUpdated };
     }
 
     public static ShoppingCart Empty()
@@ -137,18 +135,8 @@ public enum ShoppingCartStatus
 public class GettingStateFromEventsTests
 {
     // 1. Add logic here
-    private static ShoppingCart GetShoppingCart(IEnumerable<ShoppingCartEvent> events)
-    {
-        var shoppingCart = ShoppingCart.Empty();
-
-        foreach (var @event in events)
-        {
-            shoppingCart = ShoppingCart.Evolve(@event, shoppingCart);
-        }
-
-        return shoppingCart;
-    }
-
+    private static ShoppingCart GetShoppingCart(IEnumerable<ShoppingCartEvent> events) =>
+        events.Aggregate(ShoppingCart.Empty(), ShoppingCart.Evolve);
 
     [Fact]
     [Trait("Category", "SkipCI")]
