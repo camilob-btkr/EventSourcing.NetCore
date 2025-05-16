@@ -1,3 +1,4 @@
+using System.Text.Json;
 using EventStore.Client;
 using FluentAssertions;
 using IntroductionToEventSourcing.GettingStateFromEvents.Tools;
@@ -59,7 +60,7 @@ public class ShoppingCart
     public DateTime? ConfirmedAt { get; private set; }
     public DateTime? CanceledAt { get; private set; }
 
-    public void Evolve(ShoppingCartEvent @event)
+    public void Evolve(Object @event)
     {
         switch (@event)
         {
@@ -149,9 +150,21 @@ public class GettingStateFromEventsTests: EventStoreDBTest
     /// <param name="streamName"></param>
     /// <param name="ct"></param>
     /// <returns></returns>
-    private static Task<ShoppingCart> GetShoppingCart(EventStoreClient eventStore, string streamName, CancellationToken ct) =>
-        // 1. Add logic here
-        throw new NotImplementedException();
+    private static Task<ShoppingCart> GetShoppingCart(EventStoreClient eventStore, string streamName, CancellationToken ct)
+    {
+        var shoppingCart = new ShoppingCart();
+
+        return eventStore.ReadStreamAsync(Direction.Forwards, streamName, StreamPosition.Start, cancellationToken: ct)
+            .ForEachAsync(
+                @event =>
+                {
+                    var shoppingCartEvent = JsonSerializer.Deserialize(@event.Event.Data.Span,
+                        Type.GetType(@event.Event.EventType, true)!);
+                    shoppingCart.Evolve(shoppingCartEvent!);
+                },
+                ct
+            ).ContinueWith(_ => shoppingCart, ct);
+    }
 
     [Fact]
     [Trait("Category", "SkipCI")]
