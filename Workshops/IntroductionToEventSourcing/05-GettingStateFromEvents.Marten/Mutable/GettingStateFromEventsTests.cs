@@ -58,6 +58,49 @@ public class ShoppingCart
     public IList<PricedProductItem> ProductItems { get; } = new List<PricedProductItem>();
     public DateTime? ConfirmedAt { get; private set; }
     public DateTime? CanceledAt { get; private set; }
+
+    private void Apply(ShoppingCartCanceled canceled)
+    {
+        CanceledAt = canceled.CanceledAt;
+        Status = ShoppingCartStatus.Canceled;
+    }
+
+    private void Apply(ShoppingCartConfirmed confirmed)
+    {
+        ConfirmedAt = confirmed.ConfirmedAt;
+        Status = ShoppingCartStatus.Confirmed;
+    }
+
+    private void Apply(ProductItemRemovedFromShoppingCart productItemRemoved)
+    {
+        var product = ProductItems.First(p => p.ProductId == productItemRemoved.ProductItem.ProductId);
+
+        product.Quantity -= productItemRemoved.ProductItem.Quantity;
+
+        if (product.Quantity <= 0)
+            ProductItems.Remove(product);
+    }
+
+    private void Apply(ProductItemAddedToShoppingCart productItemAdded)
+    {
+        var product = ProductItems.FirstOrDefault(p => p.ProductId == productItemAdded.ProductItem.ProductId);
+
+
+        if (product == null)
+            ProductItems.Add(productItemAdded.ProductItem);
+        else
+        {
+            product.Quantity += productItemAdded.ProductItem.Quantity;
+        }
+    }
+
+    private void Apply(ShoppingCartOpened opened)
+    {
+        Id = opened.ShoppingCartId;
+        ClientId = opened.ClientId;
+        Status = ShoppingCartStatus.Pending;
+    }
+
 }
 
 public enum ShoppingCartStatus
@@ -76,12 +119,15 @@ public class GettingStateFromEventsTests: MartenTest
     /// <param name="shoppingCartId"></param>
     /// <param name="cancellationToken"></param>
     /// <returns></returns>
-    private static Task<ShoppingCart> GetShoppingCart(
+    private static async Task<ShoppingCart> GetShoppingCart(
         IDocumentSession documentSession,
         Guid shoppingCartId,
-        CancellationToken cancellationToken) =>
-        // 1. Add logic here
-        throw new NotImplementedException();
+        CancellationToken cancellationToken)
+    {
+        var shoppingCart = await documentSession.Events.AggregateStreamAsync<ShoppingCart>(shoppingCartId, token: cancellationToken);
+
+        return shoppingCart ?? throw new InvalidOperationException("Shopping Cart was not found!");
+    }
 
     [Fact]
     [Trait("Category", "SkipCI")]
