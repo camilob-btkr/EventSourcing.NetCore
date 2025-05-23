@@ -67,6 +67,152 @@ public class ShoppingCartShortInfo
     public decimal TotalItemsCount { get; set; }
 }
 
+public static class DatabaseExtensions
+{
+    public static void GetAndStore<T>(this Database database, Guid id, Func<T, T> update) where T : class, new()
+    {
+        var item = database.Get<T>(id) ?? new T();
+
+        database.Store(id, update(item));
+    }
+}
+
+public class ShoppingCartDetailsProjection(Database database)
+{
+    public void Handle(EventEnvelope<ShoppingCartOpened> @event)
+    {
+        var shoppingCart = new ShoppingCartDetails
+        {
+            Id = @event.Data.ShoppingCartId,
+            ClientId = @event.Data.ClientId,
+            Status = ShoppingCartStatus.Pending,
+            ProductItems = new List<PricedProductItem>(),
+            TotalPrice = 0,
+            TotalItemsCount = 0
+        };
+        database.Store(@event.Data.ShoppingCartId, shoppingCart);
+    }
+
+    public void Handle(EventEnvelope<ProductItemAddedToShoppingCart> @event)
+    {
+        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, shoppingCartdetails =>
+        {
+            var productItem = @event.Data.ProductItem;
+            var existingProductItem = shoppingCartdetails.ProductItems
+                .FirstOrDefault(x => x.ProductId == productItem.ProductId);
+
+            if (existingProductItem is null)
+            {
+                shoppingCartdetails.ProductItems.Add(productItem);
+            }
+            else
+            {
+                shoppingCartdetails.ProductItems.Remove(existingProductItem);
+                shoppingCartdetails.ProductItems.Add(existingProductItem with
+                {
+                    Quantity = existingProductItem.Quantity + productItem.Quantity
+                });
+            }
+
+            shoppingCartdetails.TotalPrice += productItem.TotalAmount;
+            shoppingCartdetails.TotalItemsCount += productItem.Quantity;
+
+            return shoppingCartdetails;
+        });
+    }
+
+    public void Handle(EventEnvelope<ProductItemRemovedFromShoppingCart> @event)
+    {
+        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, shoppingCartdetails =>
+        {
+            var productItem = @event.Data.ProductItem;
+            var existingProductItem = shoppingCartdetails.ProductItems
+                .FirstOrDefault(x => x.ProductId == productItem.ProductId);
+
+            if (existingProductItem == null || existingProductItem.Quantity - productItem.Quantity < 0)
+                return shoppingCartdetails;
+
+
+            shoppingCartdetails.ProductItems.Remove(existingProductItem);
+            shoppingCartdetails.ProductItems.Add(existingProductItem with
+            {
+                Quantity = existingProductItem.Quantity - productItem.Quantity
+            });
+
+
+            shoppingCartdetails.TotalPrice -= productItem.TotalAmount;
+            shoppingCartdetails.TotalItemsCount -= productItem.Quantity;
+
+            return shoppingCartdetails;
+        });
+    }
+
+    public void Handle(EventEnvelope<ShoppingCartConfirmed> @event)
+    {
+        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, shoppingCartdetails =>
+        {
+            shoppingCartdetails.ConfirmedAt = @event.Data.ConfirmedAt;
+            shoppingCartdetails.Status = ShoppingCartStatus.Confirmed;
+            return shoppingCartdetails;
+        });
+    }
+
+    public void Handle(EventEnvelope<ShoppingCartCanceled> @event)
+    {
+        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, shoppingCartdetails =>
+        {
+            shoppingCartdetails.CanceledAt = @event.Data.CanceledAt;
+            shoppingCartdetails.Status = ShoppingCartStatus.Canceled;
+            return shoppingCartdetails;
+        });
+    }
+}
+
+public class ShoppingCartShortInfoProjection(Database database)
+{
+    public void Handle(EventEnvelope<ShoppingCartOpened> @event)
+    {
+        var ShoppingCartShortInfo = new ShoppingCartShortInfo
+        {
+            Id = @event.Data.ShoppingCartId, ClientId = @event.Data.ClientId, TotalPrice = 0, TotalItemsCount = 0
+        };
+        database.Store(@event.Data.ShoppingCartId, ShoppingCartShortInfo);
+    }
+
+
+    public void Handle(EventEnvelope<ProductItemAddedToShoppingCart> @event)
+    {
+        database.GetAndStore<ShoppingCartShortInfo>(@event.Data.ShoppingCartId, shoppingCartShortInfo =>
+        {
+            var productItem = @event.Data.ProductItem;
+            shoppingCartShortInfo.TotalPrice += productItem.TotalAmount;
+            shoppingCartShortInfo.TotalItemsCount += productItem.Quantity;
+            return shoppingCartShortInfo;
+        });
+    }
+
+    public void Handle(EventEnvelope<ProductItemRemovedFromShoppingCart> @event)
+    {
+        database.GetAndStore<ShoppingCartShortInfo>(@event.Data.ShoppingCartId, shoppingCartShortInfo =>
+        {
+            var productItem = @event.Data.ProductItem;
+            shoppingCartShortInfo.TotalPrice -= productItem.TotalAmount;
+            shoppingCartShortInfo.TotalItemsCount -= productItem.Quantity;
+            return shoppingCartShortInfo;
+        });
+    }
+
+    public void Handle(EventEnvelope<ShoppingCartConfirmed> @event)
+    {
+        database.Delete<ShoppingCartShortInfo>(@event.Data.ShoppingCartId);
+    }
+
+    public void Handle(EventEnvelope<ShoppingCartCanceled> @event)
+    {
+        database.Delete<ShoppingCartShortInfo>(@event.Data.ShoppingCartId);
+    }
+}
+
 public class ProjectionsTests
 {
     [Fact]
@@ -99,6 +245,21 @@ public class ProjectionsTests
         // TODO:
         // 1. Register here your event handlers using `eventBus.Register`.
         // 2. Store results in database.
+        var shoppingCartDetailsProjection = new ShoppingCartDetailsProjection(database);
+
+        eventStore.Register<ShoppingCartOpened>(shoppingCartDetailsProjection.Handle);
+        eventStore.Register<ProductItemAddedToShoppingCart>(shoppingCartDetailsProjection.Handle);
+        eventStore.Register<ProductItemRemovedFromShoppingCart>(shoppingCartDetailsProjection.Handle);
+        eventStore.Register<ShoppingCartConfirmed>(shoppingCartDetailsProjection.Handle);
+        eventStore.Register<ShoppingCartCanceled>(shoppingCartDetailsProjection.Handle);
+
+        var shoppingCartInfoProjection = new ShoppingCartShortInfoProjection(database);
+
+        eventStore.Register<ShoppingCartOpened>(shoppingCartInfoProjection.Handle);
+        eventStore.Register<ProductItemAddedToShoppingCart>(shoppingCartInfoProjection.Handle);
+        eventStore.Register<ProductItemRemovedFromShoppingCart>(shoppingCartInfoProjection.Handle);
+        eventStore.Register<ShoppingCartConfirmed>(shoppingCartInfoProjection.Handle);
+        eventStore.Register<ShoppingCartCanceled>(shoppingCartInfoProjection.Handle);
 
         // first confirmed
         eventStore.Append(shoppingCartId, new ShoppingCartOpened(shoppingCartId, clientId));
@@ -114,13 +275,17 @@ public class ProjectionsTests
 
         // confirmed but other client
         eventStore.Append(otherClientShoppingCartId, new ShoppingCartOpened(otherClientShoppingCartId, otherClientId));
-        eventStore.Append(otherClientShoppingCartId, new ProductItemAddedToShoppingCart(otherClientShoppingCartId, dress));
-        eventStore.Append(otherClientShoppingCartId, new ShoppingCartConfirmed(otherClientShoppingCartId, DateTime.UtcNow));
+        eventStore.Append(otherClientShoppingCartId,
+            new ProductItemAddedToShoppingCart(otherClientShoppingCartId, dress));
+        eventStore.Append(otherClientShoppingCartId,
+            new ShoppingCartConfirmed(otherClientShoppingCartId, DateTime.UtcNow));
 
         // second confirmed
         eventStore.Append(otherConfirmedShoppingCartId, new ShoppingCartOpened(otherConfirmedShoppingCartId, clientId));
-        eventStore.Append(otherConfirmedShoppingCartId, new ProductItemAddedToShoppingCart(otherConfirmedShoppingCartId, trousers));
-        eventStore.Append(otherConfirmedShoppingCartId, new ShoppingCartConfirmed(otherConfirmedShoppingCartId, DateTime.UtcNow));
+        eventStore.Append(otherConfirmedShoppingCartId,
+            new ProductItemAddedToShoppingCart(otherConfirmedShoppingCartId, trousers));
+        eventStore.Append(otherConfirmedShoppingCartId,
+            new ShoppingCartConfirmed(otherConfirmedShoppingCartId, DateTime.UtcNow));
 
         // first pending
         eventStore.Append(otherPendingShoppingCartId, new ShoppingCartOpened(otherPendingShoppingCartId, clientId));
