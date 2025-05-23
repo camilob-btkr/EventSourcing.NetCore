@@ -147,7 +147,7 @@ public class ShoppingCart: Aggregate<ShoppingCartEvent>
                 $"Removing product item for cart in '{Status}' status is not allowed.");
 
         if (!HasEnough(productItemToBeRemoved))
-            throw new InvalidOperationException("Not enough product items to remove");
+                throw new InvalidOperationException("Not enough product items to remove");
 
         var @event = new ProductItemRemovedFromShoppingCart(Id, productItemToBeRemoved);
 

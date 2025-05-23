@@ -41,7 +41,7 @@ public class BusinessLogicTests
 
         // Open
         var shoppingCart = ShoppingCart.Open(shoppingCartId, clientId);
-        eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+        eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
 
         // Add Two Pair of Shoes
         shoppingCart = eventStore.GetShoppingCart(shoppingCartId);
@@ -49,7 +49,7 @@ public class BusinessLogicTests
             FakeProductPriceCalculator.Returning(shoesPrice),
             twoPairsOfShoes
         );
-        eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+        eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
 
         // Add T-Shirt
         shoppingCart = eventStore.GetShoppingCart(shoppingCartId);
@@ -57,24 +57,24 @@ public class BusinessLogicTests
             FakeProductPriceCalculator.Returning(tShirtPrice),
             tShirt
         );
-        eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+        eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
 
         // Remove a pair of shoes
         shoppingCart = eventStore.GetShoppingCart(shoppingCartId);
         shoppingCart.RemoveProduct(pricedPairOfShoes);
-        eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+        eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
 
         // Confirm
         shoppingCart = eventStore.GetShoppingCart(shoppingCartId);
         shoppingCart.Confirm();
-        eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+        eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
 
         // Try Cancel
         var exception = Record.Exception(() =>
         {
             shoppingCart = eventStore.GetShoppingCart(shoppingCartId);
             shoppingCart.Cancel();
-            eventStore.AppendToStream(shoppingCartId, shoppingCart.UncommittedEvents);
+            eventStore.AppendToStream(shoppingCartId, shoppingCart.GetUncommittedEvents());
         });
         exception.Should().BeOfType<InvalidOperationException>();
 
