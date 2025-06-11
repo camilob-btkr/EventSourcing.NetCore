@@ -47,7 +47,12 @@ public enum ShoppingCartStatus
     Canceled = 4
 }
 
-public class ShoppingCartDetails
+public interface IVersioned
+{
+    ulong Version { get; set; }
+}
+
+public class ShoppingCartDetails: IVersioned
 {
     public Guid Id { get; set; }
     public Guid ClientId { get; set; }
@@ -57,30 +62,40 @@ public class ShoppingCartDetails
     public DateTime? CanceledAt { get; set; }
     public decimal TotalPrice { get; set; }
     public decimal TotalItemsCount { get; set; }
+    public ulong Version { get; set; }
 }
 
-public class ShoppingCartShortInfo
+public class ShoppingCartShortInfo: IVersioned
 {
     public Guid Id { get; set; }
     public Guid ClientId { get; set; }
     public decimal TotalPrice { get; set; }
     public decimal TotalItemsCount { get; set; }
+    public ulong Version { get; set; }
 }
 
 public static class DatabaseExtensions
 {
-    public static void GetAndStore<T>(this Database database, Guid id, Func<T, T> update) where T : class, new ()
+    public static void GetAndStore<T>(this Database database, Guid id, ulong version, Func<T, T> update)
+        where T : class, IVersioned, new()
     {
-        var item = database.Get<T>(id) ?? new T();
+        var item = database.Get<T>(id);
 
-        database.Store(id, update(item));
+        if (item == null)
+            throw new Exception($"Item with id: '{id}' and expected version: {version} not found!");
+
+        if (item.Version >= version) return;
+
+        database.Store(id, version, update(item));
     }
 }
 
 public class ShoppingCartDetailsProjection(Database database)
 {
     public void Handle(EventEnvelope<ShoppingCartOpened> @event) =>
-        database.Store(@event.Data.ShoppingCartId,
+        database.Store(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
             new ShoppingCartDetails
             {
                 Id = @event.Data.ShoppingCartId,
@@ -92,7 +107,10 @@ public class ShoppingCartDetailsProjection(Database database)
             });
 
     public void Handle(EventEnvelope<ProductItemAddedToShoppingCart> @event) =>
-        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartDetails>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             var productItem = @event.Data.ProductItem;
             var existingProductItem = item.ProductItems.SingleOrDefault(p => p.ProductId == productItem.ProductId);
@@ -120,7 +138,10 @@ public class ShoppingCartDetailsProjection(Database database)
         });
 
     public void Handle(EventEnvelope<ProductItemRemovedFromShoppingCart> @event) =>
-        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartDetails>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             var productItem = @event.Data.ProductItem;
             var existingProductItem = item.ProductItems.SingleOrDefault(p => p.ProductId == productItem.ProductId);
@@ -152,7 +173,10 @@ public class ShoppingCartDetailsProjection(Database database)
         });
 
     public void Handle(EventEnvelope<ShoppingCartConfirmed> @event) =>
-        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartDetails>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             item.Status = ShoppingCartStatus.Confirmed;
             item.ConfirmedAt = DateTime.UtcNow;
@@ -162,7 +186,10 @@ public class ShoppingCartDetailsProjection(Database database)
 
 
     public void Handle(EventEnvelope<ShoppingCartCanceled> @event) =>
-        database.GetAndStore<ShoppingCartDetails>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartDetails>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             item.Status = ShoppingCartStatus.Canceled;
             item.CanceledAt = DateTime.UtcNow;
@@ -174,7 +201,9 @@ public class ShoppingCartDetailsProjection(Database database)
 public class ShoppingCartShortInfoProjection(Database database)
 {
     public void Handle(EventEnvelope<ShoppingCartOpened> @event) =>
-        database.Store(@event.Data.ShoppingCartId,
+        database.Store(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
             new ShoppingCartShortInfo
             {
                 Id = @event.Data.ShoppingCartId,
@@ -184,7 +213,10 @@ public class ShoppingCartShortInfoProjection(Database database)
             });
 
     public void Handle(EventEnvelope<ProductItemAddedToShoppingCart> @event) =>
-        database.GetAndStore<ShoppingCartShortInfo>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartShortInfo>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             var productItem = @event.Data.ProductItem;
 
@@ -195,7 +227,10 @@ public class ShoppingCartShortInfoProjection(Database database)
         });
 
     public void Handle(EventEnvelope<ProductItemRemovedFromShoppingCart> @event) =>
-        database.GetAndStore<ShoppingCartShortInfo>(@event.Data.ShoppingCartId, item =>
+        database.GetAndStore<ShoppingCartShortInfo>(
+            @event.Data.ShoppingCartId,
+            @event.Metadata.StreamPosition,
+            item =>
         {
             var productItem = @event.Data.ProductItem;
 
@@ -275,13 +310,17 @@ public class ProjectionsTests
 
         // confirmed but other client
         eventStore.Append(otherClientShoppingCartId, new ShoppingCartOpened(otherClientShoppingCartId, otherClientId));
-        eventStore.Append(otherClientShoppingCartId, new ProductItemAddedToShoppingCart(otherClientShoppingCartId, dress));
-        eventStore.Append(otherClientShoppingCartId, new ShoppingCartConfirmed(otherClientShoppingCartId, DateTime.UtcNow));
+        eventStore.Append(otherClientShoppingCartId,
+            new ProductItemAddedToShoppingCart(otherClientShoppingCartId, dress));
+        eventStore.Append(otherClientShoppingCartId,
+            new ShoppingCartConfirmed(otherClientShoppingCartId, DateTime.UtcNow));
 
         // second confirmed
         eventStore.Append(otherConfirmedShoppingCartId, new ShoppingCartOpened(otherConfirmedShoppingCartId, clientId));
-        eventStore.Append(otherConfirmedShoppingCartId, new ProductItemAddedToShoppingCart(otherConfirmedShoppingCartId, trousers));
-        eventStore.Append(otherConfirmedShoppingCartId, new ShoppingCartConfirmed(otherConfirmedShoppingCartId, DateTime.UtcNow));
+        eventStore.Append(otherConfirmedShoppingCartId,
+            new ProductItemAddedToShoppingCart(otherConfirmedShoppingCartId, trousers));
+        eventStore.Append(otherConfirmedShoppingCartId,
+            new ShoppingCartConfirmed(otherConfirmedShoppingCartId, DateTime.UtcNow));
 
         // first pending
         eventStore.Append(otherPendingShoppingCartId, new ShoppingCartOpened(otherPendingShoppingCartId, clientId));
